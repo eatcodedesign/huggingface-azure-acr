@@ -1,18 +1,7 @@
-name: Trigger auto deployment for demo-container
+name: Trigger auto deployment for hf-fastapi-app
 
-#env:
-#  AZURE_CONTAINER_APP_NAME: demo-container
-#  AZURE_GROUP_NAME: demo-container
-
-# When this action will be executed
 on:
-  # Automatically trigger it when detected changes in repo. Remove comments to enable
-  #push:
-  #  branches: 
-  #    [ main ]
-
-  # Allow mannually trigger 
-  workflow_dispatch:      
+  workflow_dispatch: # Allows you to click "Run workflow" manually
 
 jobs:
   build:
@@ -20,26 +9,26 @@ jobs:
 
     steps:
       - name: Checkout to the branch
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v2
 
       - name: Log in to GitHub container registry
-        uses: docker/login-action@v1.10.0
+        uses: docker/login-action@v2
         with:
-          registry: demoalfredo.azurecr.io
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.CR_PAT }}
 
       - name: Lowercase the repo name and username
         run: echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
 
-      - name: Build and push container image to ACR registry
-        uses: docker/build-push-action@v2
+      - name: Build and push container image to GHCR
+        uses: docker/build-push-action@v4
         with:
           push: true
-          tags: demoalfredo.azurecr.io/${{ env.REPO }}:${{ github.sha }}
+          tags: ghcr.io/${{ env.REPO }}:latest
           file: ./Dockerfile
 
   deploy:
@@ -52,12 +41,34 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Lowercase the repo name and username
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
 
-      - name: Deploy to containerapp
+      - name: Deploy or Update Azure Container App
         uses: azure/CLI@v1
         with:
           inlineScript: |
             az config set extension.use_dynamic_install=yes_without_prompt
-            az containerapp registry set -n demo-container -g demo-container --server demoalfredo.azurecr.io --username ${{ secrets.ACR_USERNAME }} --password ${{ secrets.ACR_PASSWORD }}
-            az containerapp update -n demo-container -g demo-container --cpu 2 --memory 4Gi
-            az containerapp update -n demo-container -g demo-container --image demoalfredo.azurecr.io/alfredodeza/huggingface-azure-acr:${{ github.sha }}
+            
+            # Check if the container app already exists from a previous run
+            if az containerapp show --name hf-fastapi-app --resource-group hf-deployment-rg &>/dev/null; then
+              echo "App exists. Updating with the newly built image..."
+              az containerapp update \
+                --name hf-fastapi-app \
+                --resource-group hf-deployment-rg \
+                --image ghcr.io/${{ env.REPO }}:latest
+            else
+              echo "App does not exist yet. Provisioning it fresh..."
+              az containerapp create \
+                --name hf-fastapi-app \
+                --resource-group hf-deployment-rg \
+                --environment hf-env \
+                --image ghcr.io/${{ env.REPO }}:latest \
+                --target-port 80 \
+                --ingress external \
+                --cpu "2.0" \
+                --memory "4.0Gi" \
+                --registry-server "ghcr.io" \
+                --registry-username "${{ github.actor }}" \
+                --registry-password "${{ secrets.CR_PAT }}"
+            fi
