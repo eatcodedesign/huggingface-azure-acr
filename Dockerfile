@@ -1,15 +1,20 @@
-# 1. Switched to a lightweight, modern base image
+# Start with the lightweight base image
 FROM python:3.10-slim
 
-# 2. Perfect caching sequence retained
+# Install system dependencies required by TensorFlow on slim images
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+
 COPY ./requirements.txt /webapp/requirements.txt
 WORKDIR /webapp
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 3. Import application code
+# Import application code
 COPY webapp/* /webapp
 
-# 4. Bake the model weights directly into the container image
+# Bake the model weights directly into the container image
 RUN python -c "from transformers import AutoTokenizer, TFGPT2LMHeadModel; AutoTokenizer.from_pretrained('gpt2'); TFGPT2LMHeadModel.from_pretrained('gpt2')"
 
 EXPOSE 8000
